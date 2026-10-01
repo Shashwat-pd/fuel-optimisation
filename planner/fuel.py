@@ -11,7 +11,7 @@ class NotEnoughStations(Exception):
 
 
 def plan_fuel(stations, distance_miles, initial_gallons):
-    start = {"mile": -(TANK_GALLONS - initial_gallons) * MPG, "price": Decimal(0), "virtual": True}
+    start = {"mile": (initial_gallons - TANK_GALLONS) * MPG, "price": Decimal(0), "virtual": True}
     stops = [start] + [s for s in stations if s["mile"] <= distance_miles]
 
     plan = []
@@ -58,7 +58,7 @@ def plan_fuel(stations, distance_miles, initial_gallons):
         arrive = fuel
         fuel += buy
 
-        if buy > EPS and not here.get("virtual"):
+        if round(buy, 3) > 0 and not here.get("virtual"):
             cost = here["price"] * Decimal(str(round(buy, 4)))
             total += cost
             plan.append({
