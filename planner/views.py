@@ -1,6 +1,8 @@
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from planner.serializers import RouteRequestSerializer
+
 STUB_RESPONSE = {
     "route": {"type": "Feature", "geometry": {"type": "LineString", "coordinates": []}, "properties": {}},
     "fuel_stops": [],
@@ -16,4 +18,5 @@ STUB_RESPONSE = {
 
 class RouteView(APIView):
     def post(self, request):
+        RouteRequestSerializer(data=request.data).is_valid(raise_exception=True)
         return Response(STUB_RESPONSE, status=200)
