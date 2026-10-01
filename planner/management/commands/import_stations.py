@@ -5,8 +5,10 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from planner.models import Station
+from planner.places import find_place
 
 REQUIRED_COLUMNS = {"id", "name", "latitude", "longitude", "price"}
+OPIS_COLUMNS = {"OPIS Truckstop ID", "Truckstop Name", "Address", "City", "State", "Retail Price"}
 
 
 class Command(BaseCommand):
@@ -18,12 +20,18 @@ class Command(BaseCommand):
         try:
             with open(options["path"], newline="", encoding="utf-8-sig") as f:
                 reader = csv.DictReader(f)
-                missing = REQUIRED_COLUMNS - set(reader.fieldnames or [])
-                if missing:
-                    raise CommandError(f"Missing columns: {', '.join(sorted(missing))}")
+                columns = set(reader.fieldnames or [])
+                skipped = 0
+                if OPIS_COLUMNS <= columns:
+                    rows, skipped = self.opis_rows(reader)
+                else:
+                    missing = REQUIRED_COLUMNS - columns
+                    if missing:
+                        raise CommandError(f"Missing columns: {', '.join(sorted(missing))}")
+                    rows = enumerate(reader, start=2)
                 stations = []
                 seen_ids = set()
-                for line, row in enumerate(reader, start=2):
+                for line, row in rows:
                     try:
                         stations.append(self.parse_row(row, seen_ids))
                     except (ValueError, TypeError) as e:
@@ -45,6 +53,33 @@ class Command(BaseCommand):
                 update_fields=["name", "address", "latitude", "longitude", "price"],
             )
         self.stdout.write(self.style.SUCCESS(f"Imported {len(stations)} stations"))
+        if skipped:
+            self.stdout.write(self.style.WARNING(f"Skipped {skipped} rows with an unknown city"))
+
+    def opis_rows(self, reader):
+        cheapest = {}
+        skipped = 0
+        for line, row in enumerate(reader, start=2):
+            place = find_place(f"{row['City']}, {row['State']}")
+            if place is None:
+                skipped += 1
+                continue
+            try:
+                price = Decimal(row["Retail Price"]).quantize(Decimal("0.001"))
+            except (InvalidOperation, TypeError):
+                raise CommandError(f"Line {line}: bad price")
+            external_id = (row["OPIS Truckstop ID"] or "").strip()
+            if external_id in cheapest and Decimal(cheapest[external_id][1]["price"]) <= price:
+                continue
+            cheapest[external_id] = (line, {
+                "id": external_id,
+                "name": row["Truckstop Name"],
+                "address": f"{row['Address'].strip()}, {place['name']}",
+                "latitude": str(place["latitude"]),
+                "longitude": str(place["longitude"]),
+                "price": str(price),
+            })
+        return list(cheapest.values()), skipped
 
     def parse_row(self, row, seen_ids):
         external_id = (row["id"] or "").strip()
