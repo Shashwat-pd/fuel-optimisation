@@ -7,7 +7,7 @@ from rest_framework import serializers
 
 from planner.errors import PlanError
 from planner.models import Station
-from planner.places import find_city
+from planner.places import all_places, make_key
 from planner.serializers import CoordinatesSerializer
 
 BASIC_COLUMNS = {"id", "name", "latitude", "longitude", "price"}
@@ -24,10 +24,14 @@ def check_coordinates(latitude, longitude):
 
 
 def read_opis(reader):
+    places = all_places()
+    if not places:
+        raise CommandError("City list is not loaded. Run: python manage.py import_places")
     cheapest = {}
     skipped = 0
     for line, row in enumerate(reader, start=2):
-        place = find_city(row["City"], row["State"])
+        state, key = make_key(row["City"], row["State"])
+        place = places.get((state, key))
         if place is None:
             skipped += 1
             continue
