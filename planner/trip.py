@@ -1,5 +1,3 @@
-from django.conf import settings
-
 from planner.errors import PlanError
 from planner.fuel import plan_fuel
 from planner.places import find_place
@@ -22,31 +20,33 @@ def plan_trip(start_text, finish_text, initial_gallons):
 
     miles = route["distance"] / METERS_PER_MILE
     stations = stations_along_route(route["geometry"], miles)
-    result = plan_fuel(stations, miles, initial_gallons)
+    plan = plan_fuel(stations, miles, initial_gallons)
 
-    result.update(
-        {
-            "distance_miles": round(miles, 3),
-            "duration_seconds": round(route["duration"]),
-            "route": {"type": "Feature", "geometry": route["geometry"], "properties": {}},
-            "start": [start["longitude"], start["latitude"]],
-            "finish": [finish["longitude"], finish["latitude"]],
-            "start_name": start["name"],
-            "finish_name": finish["name"],
-            "assumptions": {
-                "mpg": 10,
-                "tank_capacity_gallons": 50,
-                "range_miles": 500,
-                "initial_fuel_cost": "Existing fuel is treated as prepaid and excluded from total_money_spent.",
-                "optimization": "Minimum purchase cost on the supplied fixed route, assuming station access adds no mileage.",
-                "station_location": "The fuel file has no coordinates, so each station is placed at its city's center.",
-                "endpoints": "Start and finish are city centers.",
-                "station_access": f"Stations within {settings.STATION_CORRIDOR_MILES} miles of the route are considered; "
-                "road access and detours are not verified. Costs and range are estimates; retain a fuel reserve.",
-                "route_choice": "OSRM driving route, not a globally minimum-cost route.",
-            },
-            "attribution": "Routing: OSRM; map data © OpenStreetMap contributors; "
-            "places: US Census Bureau, GeoNames (CC BY 4.0)",
-        }
-    )
-    return result
+    return {
+        "start": start,
+        "finish": finish,
+        "distance_miles": round(miles, 1),
+        "duration_minutes": round(route["duration"] / 60),
+        "total_money_spent": plan["total_money_spent"],
+        "fuel": {
+            "start_gallons": round(plan["initial_fuel_gallons"], 2),
+            "used_gallons": round(plan["fuel_consumed_gallons"], 2),
+            "end_gallons": round(plan["remaining_fuel_gallons"], 2),
+        },
+        "fuel_stops": [
+            {
+                "name": stop["name"],
+                "address": stop["address"],
+                "latitude": stop["latitude"],
+                "longitude": stop["longitude"],
+                "mile": round(stop["route_mile"], 1),
+                "price_per_gallon": stop["price_per_gallon"],
+                "gallons": round(stop["gallons"], 2),
+                "cost": stop["cost"],
+            }
+            for stop in plan["fuel_stops"]
+            if round(stop["gallons"], 2) > 0
+        ],
+        "route": route["geometry"],
+        "attribution": "Routing: OSRM, map data © OpenStreetMap contributors; places: US Census Bureau, GeoNames",
+    }
