@@ -1,49 +1,48 @@
-import shapely
-from pyproj import Transformer
-from shapely.geometry import LineString
+from decimal import Decimal
+
+import numpy as np
+from django.conf import settings
+from pyproj import Geod, Transformer
+from shapely.geometry import LineString, Point
+from shapely.strtree import STRtree
 
 from planner.models import Station
 
-CORRIDOR_MILES = 5
 METERS_PER_MILE = 1609.344
-
-to_meters = Transformer.from_crs("EPSG:4326", "EPSG:5070", always_xy=True)
 
 
 def stations_along_route(geometry, distance_miles):
     coords = geometry["coordinates"]
-    lons = [c[0] for c in coords]
-    lats = [c[1] for c in coords]
-    pad = 0.2
-    stations = list(Station.objects.filter(
-        latitude__gte=min(lats) - pad,
-        latitude__lte=max(lats) + pad,
-        longitude__gte=min(lons) - pad,
-        longitude__lte=max(lons) + pad,
-    ))
-    if not stations:
+    lons, lats = np.array(coords, dtype=float).T
+    geodesic = Geod(ellps="WGS84").inv(lons[:-1], lats[:-1], lons[1:], lats[1:])[2]
+    along = np.r_[0.0, np.cumsum(geodesic)]
+    if along[-1] <= 0:
+        return []
+    route_miles = along / along[-1] * distance_miles
+
+    to_meters = Transformer.from_crs(4326, 2163, always_xy=True).transform
+    xy = np.column_stack(to_meters(lons, lats))
+    line = LineString(xy)
+    flat = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+
+    rows = list(
+        Station.objects.filter(
+            latitude__gte=lats.min() - 0.1,
+            latitude__lte=lats.max() + 0.1,
+            longitude__gte=lons.min() - 0.5,
+            longitude__lte=lons.max() + 0.5,
+        ).values("external_id", "name", "address", "latitude", "longitude", "price")
+    )
+    if not rows:
         return []
 
-    line = LineString(zip(*to_meters.transform(lons, lats)))
-    xs, ys = to_meters.transform([s.longitude for s in stations], [s.latitude for s in stations])
-    points = shapely.points(xs, ys)
-    shapely.prepare(line)
-    near = shapely.dwithin(line, points, CORRIDOR_MILES * METERS_PER_MILE)
+    points = [Point(*to_meters(r["longitude"], r["latitude"])) for r in rows]
+    near = STRtree(points).query(line, predicate="dwithin", distance=settings.STATION_CORRIDOR_MILES * METERS_PER_MILE)
 
     result = []
-    for station, point, is_near in zip(stations, points, near):
-        if not is_near:
-            continue
-        mile = line.project(point) / line.length * distance_miles
-        result.append({
-            "id": station.external_id,
-            "name": station.name,
-            "address": station.address,
-            "latitude": station.latitude,
-            "longitude": station.longitude,
-            "price": station.price,
-            "mile": mile,
-            "distance_from_route_miles": round(line.distance(point) / METERS_PER_MILE, 2),
-        })
-    result.sort(key=lambda s: s["mile"])
+    for i in near:
+        row, point = rows[i], points[i]
+        price = Decimal(row.pop("price"))
+        row["distance_from_route_miles"] = round(line.distance(point) / METERS_PER_MILE, 3)
+        result.append({"mile": float(np.interp(line.project(point), flat, route_miles)), "price": price, "station": row})
     return result
