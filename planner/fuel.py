@@ -41,38 +41,55 @@ def find_next_cheapest(miles, prices):
 
 
 def plan_fuel(stations, distance, initial_gallons=50):
-    on_route = sorted((s for s in stations if 0 <= s["mile"] < distance), key=lambda s: (s["mile"], s["price"]))
-    nodes = [{"mile": -(TANK_GALLONS - initial_gallons) * MPG, "price": Decimal(0), "station": {}}] + on_route
-    miles = [n["mile"] for n in nodes]
+
+    on_route = sorted(
+        (s for s in stations if 0 <= s["mile"] < distance),
+        key=lambda s: (s["mile"], s["price"]),
+    )
+
+    # assume: we filled a full tank for free somewhere behind the start?
+    free_fill = {"mile": -(TANK_GALLONS - initial_gallons) * MPG, "price": Decimal(0), "station": {}}
+    nodes = [free_fill, *on_route]
+    miles = [n["mile"] for n in nodes]  # route mile of each stop
     prices = [n["price"] for n in nodes]
+
     next_cheapest = find_next_cheapest(miles, prices)
     breaks = find_breaks(miles, prices)
+    finish = len(nodes)
 
+    # A "break" is a station with nothing cheaper in the 500 miles behind it, so it's
+    # a good place to arrive nearly empty. Plan each stretch between breaks on its own.
     buy = {}
-    for start, end in zip(breaks, breaks[1:] + [len(nodes)]):
-        end_mile = distance if end == len(nodes) else miles[end]
-        x = start
+    for here, end in zip(breaks, [*breaks[1:], finish]):
+        end_mile = distance if end == finish else miles[end]
         fuel = 0.0
-        while end_mile - miles[x] > RANGE_MILES + EPS:
-            nxt = next_cheapest[x]
-            if nxt is None:
+
+        # Too far to reach the end of this stretch in one go: fill up and hop to the
+        # cheapest station within range, and repeat until the end is reachable.
+        while end_mile - miles[here] > RANGE_MILES + EPS:
+            hop = next_cheapest[here]
+            if hop is None:
                 raise PlanError(
-                    f"Insufficient station coverage near mile {max(0.0, miles[x]):.1f}; "
+                    f"Insufficient station coverage near mile {max(0.0, miles[here]):.1f}; "
                     "next station/destination is unreachable.",
                     "insufficient_coverage",
                     422,
                 )
-            buy[x] = TANK_GALLONS - fuel
-            fuel = TANK_GALLONS - (miles[nxt] - miles[x]) / MPG
-            x = nxt
-        buy[x] = max(0.0, (end_mile - miles[x]) / MPG - fuel)
+            buy[here] = TANK_GALLONS - fuel
+            fuel = TANK_GALLONS - (miles[hop] - miles[here]) / MPG
+            here = hop
 
+        # The end is in reach now, so buy just enough to get there.
+        buy[here] = max(0.0, (end_mile - miles[here]) / MPG - fuel)
+
+    # Drive the plan again from the real starting tank to work out what the
+    # gauge reads at each stop and what each fill-up costs.
     fuel = float(initial_gallons)
     last_mile = 0.0
     total = Decimal(0)
     stops = []
-    for i in sorted(buy):
-        gallons = buy[i]
+    for i, gallons in sorted(buy.items()):
+        # Skip the free fill and any purchase too small to matter.
         if i == 0 or gallons <= 1e-8:
             continue
         node = nodes[i]
@@ -80,16 +97,20 @@ def plan_fuel(stations, distance, initial_gallons=50):
         last_mile = node["mile"]
         cost = Decimal(str(gallons)) * node["price"]
         total += cost
-        stops.append({
-            **node["station"],
-            "route_mile": round(node["mile"], 3),
-            "price_per_gallon": str(node["price"]),
-            "gallons": round(gallons, 6),
-            "cost": money(cost),
-            "arrival_gallons": round(fuel, 6),
-            "departure_gallons": round(fuel + gallons, 6),
-        })
+        stops.append(
+            {
+                **node["station"],
+                "route_mile": round(node["mile"], 3),
+                "price_per_gallon": str(node["price"]),
+                "gallons": round(gallons, 6),
+                "cost": money(cost),
+                "arrival_gallons": round(fuel, 6),
+                "departure_gallons": round(fuel + gallons, 6),
+            }
+        )
         fuel += gallons
+
+    # Whatever is left after the last leg to the finish.
     fuel = max(0.0, fuel - (distance - last_mile) / MPG)
 
     return {
