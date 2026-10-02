@@ -57,8 +57,7 @@ def plan_fuel(stations, distance, initial_gallons=50):
     breaks = find_breaks(miles, prices)
     finish = len(nodes)
 
-    # A "break" is a station with nothing cheaper in the 500 miles behind it, so it's
-    # a good place to arrive nearly empty. Plan each stretch between breaks on its own.
+    # A "break" is a station with nothing cheaper in the 500 miles behind it
     buy = {}
     for here, end in zip(breaks, [*breaks[1:], finish]):
         end_mile = distance if end == finish else miles[end]
