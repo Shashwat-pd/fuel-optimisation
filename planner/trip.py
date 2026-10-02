@@ -15,13 +15,14 @@ def resolve(text):
 
 
 def plan_trip(start_text, finish_text, initial_gallons):
-    start = resolve(start_text) 
+    start = resolve(start_text)
     finish = resolve(finish_text)
 
     route = get_route(start, finish)
 
     miles = route["distance"] / METERS_PER_MILE
-    result = plan_fuel(stations_along_route(route["geometry"], miles), miles, initial_gallons)
+    stations = stations_along_route(route["geometry"], miles)
+    result = plan_fuel(stations, miles, initial_gallons)
 
     result.update(
         {
